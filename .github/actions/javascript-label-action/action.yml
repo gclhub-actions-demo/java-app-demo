@@ -1,0 +1,33 @@
+name: 'PR Auto Labeler'
+description: 'Automatically labels pull requests based on changed files'
+author: 'Your Organization'
+
+inputs:
+  github-token:
+    description: 'GitHub token for API access'
+    required: true
+  label-config:
+    description: 'JSON configuration for label mappings'
+    required: false
+    default: |
+      {
+        "src/main/java/**": ["java", "backend"],
+        "src/test/**": ["tests"],
+        ".github/workflows/**": ["ci/cd"],
+        "docs/**": ["documentation"],
+        "*.md": ["documentation"],
+        "pom.xml": ["dependencies"],
+        "Dockerfile": ["docker"]
+      }
+
+outputs:
+  labels-added:
+    description: 'Comma-separated list of labels that were added'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+
+branding:
+  icon: 'tag'
+  color: 'green'

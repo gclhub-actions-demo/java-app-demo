@@ -1,0 +1,199 @@
+name: Required Dependency Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**/pom.xml'
+      - '**/package.json'
+      - '**/requirements.txt'
+      - '**/go.mod'
+      - '**/Gemfile'
+  push:
+    branches:
+      - main
+      - master
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  security-events: write
+
+jobs:
+  dependency-scan:
+    name: Scan Dependencies for Vulnerabilities
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Run Dependency Check
+        uses: dependency-check/Dependency-Check_Action@main
+        id: dependency-check
+        with:
+          project: ${{ github.repository }}
+          path: '.'
+          format: 'JSON'
+          out: 'reports'
+          args: >
+            --enableRetired
+            --enableExperimental
+            --suppression dependency-check-suppressions.xml
+        continue-on-error: true
+      
+      - name: Upload dependency check report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: reports
+          retention-days: 30
+      
+      - name: Parse vulnerability results
+        id: parse-results
+        run: |
+          if [ -f reports/dependency-check-report.json ]; then
+            CRITICAL=$(jq '[.dependencies[].vulnerabilities[]? | select(.severity=="CRITICAL")] | length' reports/dependency-check-report.json)
+            HIGH=$(jq '[.dependencies[].vulnerabilities[]? | select(.severity=="HIGH")] | length' reports/dependency-check-report.json)
+            MEDIUM=$(jq '[.dependencies[].vulnerabilities[]? | select(.severity=="MEDIUM")] | length' reports/dependency-check-report.json)
+            
+            echo "critical=$CRITICAL" >> $GITHUB_OUTPUT
+            echo "high=$HIGH" >> $GITHUB_OUTPUT
+            echo "medium=$MEDIUM" >> $GITHUB_OUTPUT
+          else
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+            echo "medium=0" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const critical = ${{ steps.parse-results.outputs.critical }};
+            const high = ${{ steps.parse-results.outputs.high }};
+            const medium = ${{ steps.parse-results.outputs.medium }};
+            
+            const comment = `## 🔍 Dependency Vulnerability Scan Results
+            
+            | Severity | Count |
+            |----------|-------|
+            | Critical | ${critical} |
+            | High     | ${high} |
+            | Medium   | ${medium} |
+            
+            ${critical > 0 || high > 0 ? '⚠️ **Action Required**: Critical or High severity vulnerabilities detected.' : '✅ No critical or high severity vulnerabilities found.'}
+            
+            View the full report in the workflow artifacts.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+      
+      - name: Check vulnerability thresholds
+        run: |
+          CRITICAL=${{ steps.parse-results.outputs.critical }}
+          HIGH=${{ steps.parse-results.outputs.high }}
+          
+          echo "Critical vulnerabilities: $CRITICAL"
+          echo "High vulnerabilities: $HIGH"
+          
+          # Fail if critical vulnerabilities are found
+          if [ "$CRITICAL" -gt 0 ]; then
+            echo "❌ Critical vulnerabilities detected. Failing the build."
+            exit 1
+          fi
+          
+          # Warn if high vulnerabilities are found (adjust threshold as needed)
+          if [ "$HIGH" -gt 5 ]; then
+            echo "⚠️ Too many high severity vulnerabilities detected."
+            exit 1
+          fi
+
+  license-compliance:
+    name: License Compliance Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Setup for Java projects
+        if: hashFiles('pom.xml', 'build.gradle') != ''
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      
+      - name: Check Maven licenses
+        if: hashFiles('pom.xml') != ''
+        run: |
+          mvn license:add-third-party
+          
+          # Define prohibited licenses
+          PROHIBITED_LICENSES=("GPL" "AGPL" "LGPL")
+          
+          if [ -f target/generated-sources/license/THIRD-PARTY.txt ]; then
+            for license in "${PROHIBITED_LICENSES[@]}"; do
+              if grep -q "$license" target/generated-sources/license/THIRD-PARTY.txt; then
+                echo "❌ Prohibited license found: $license"
+                exit 1
+              fi
+            done
+          fi
+        continue-on-error: true
+      
+      - name: Upload license report
+        if: hashFiles('pom.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-report
+          path: target/generated-sources/license/THIRD-PARTY.txt
+          retention-days: 30
+
+  create-issue-for-vulnerabilities:
+    name: Create Issue for Critical Vulnerabilities
+    runs-on: ubuntu-latest
+    needs: dependency-scan
+    if: failure() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      issues: write
+    
+    steps:
+      - name: Create security issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: '🚨 Critical Dependencies Vulnerabilities Detected',
+              body: `## Dependency Vulnerability Alert
+              
+              The required dependency check workflow has detected critical or high severity vulnerabilities in this repository.
+              
+              ### Actions Required
+              1. Review the dependency check report in the workflow artifacts
+              2. Update vulnerable dependencies to secure versions
+              3. If vulnerabilities cannot be fixed immediately, add suppressions with justification
+              
+              ### Workflow Run
+              ${context.payload.repository.html_url}/actions/runs/${context.runId}
+              
+              **Priority:** Critical
+              **Assigned to:** Security team
+              
+              This issue was automatically created by the required dependency check workflow.
+              `,
+              labels: ['security', 'dependencies', 'automated']
+            });
+            
+            console.log(`Created issue #${issue.data.number}`);

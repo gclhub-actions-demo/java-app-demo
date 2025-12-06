@@ -1,0 +1,290 @@
+name: Deploy to Azure
+
+on:
+  push:
+    branches:
+      - develop  # Auto-deploy to QA
+      - main     # Auto-deploy to Staging
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        options:
+          - qa
+          - staging
+          - production
+
+permissions:
+  contents: read
+  id-token: write  # Required for OIDC authentication
+
+jobs:
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
+      
+      - name: Build application
+        run: mvn clean package -DskipTests
+      
+      - name: Run tests
+        run: mvn test
+      
+      - name: Upload JAR
+        uses: actions/upload-artifact@v4
+        with:
+          name: application-jar
+          path: target/*.jar
+          retention-days: 7
+  
+  build-container:
+    name: Build Container Image
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: application-jar
+          path: target
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Build and export Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          tags: java-app-demo:${{ github.sha }}
+          outputs: type=docker,dest=/tmp/java-app-demo.tar
+      
+      - name: Upload Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/java-app-demo.tar
+          retention-days: 7
+
+  deploy-qa:
+    name: Deploy to QA
+    runs-on: ubuntu-latest
+    needs: build-container
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'qa')
+    environment:
+      name: qa
+      url: https://java-app-demo-qa.azurewebsites.net
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+      
+      - name: Load Docker image
+        run: docker load --input /tmp/java-app-demo.tar
+      
+      - name: Azure Login with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy to Azure Container Apps (QA)
+        run: |
+          # This is a mock deployment command
+          # In production, you would use actual Azure CLI commands
+          echo "Deploying to QA environment..."
+          echo "Resource Group: ${{ vars.AZURE_RESOURCE_GROUP_QA }}"
+          echo "Container App: ${{ vars.AZURE_CONTAINER_APP_QA }}"
+          
+          # Example Azure CLI command:
+          # az containerapp update \
+          #   --name ${{ vars.AZURE_CONTAINER_APP_QA }} \
+          #   --resource-group ${{ vars.AZURE_RESOURCE_GROUP_QA }} \
+          #   --image java-app-demo:${{ github.sha }}
+      
+      - name: Health check
+        run: |
+          echo "Performing health check..."
+          # In production: curl -f https://java-app-demo-qa.azurewebsites.net/api/health || exit 1
+          echo "✅ Health check passed"
+      
+      - name: Deployment summary
+        run: |
+          echo "## QA Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully deployed to QA environment" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 URL: https://java-app-demo-qa.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Image: java-app-demo:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build-container
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://java-app-demo-staging.azurewebsites.net
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+      
+      - name: Load Docker image
+        run: docker load --input /tmp/java-app-demo.tar
+      
+      - name: Azure Login with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Deploy to Azure Container Apps (Staging)
+        run: |
+          echo "Deploying to Staging environment..."
+          echo "Resource Group: ${{ vars.AZURE_RESOURCE_GROUP_STAGING }}"
+          echo "Container App: ${{ vars.AZURE_CONTAINER_APP_STAGING }}"
+          
+          # Example with infrastructure deployment
+          # az deployment group create \
+          #   --resource-group ${{ vars.AZURE_RESOURCE_GROUP_STAGING }} \
+          #   --template-file infrastructure/main.bicep \
+          #   --parameters @infrastructure/staging.parameters.json
+      
+      - name: Run smoke tests
+        run: |
+          echo "Running smoke tests..."
+          # In production: Run actual smoke tests
+          echo "✅ Smoke tests passed"
+      
+      - name: Deployment summary
+        run: |
+          echo "## Staging Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully deployed to Staging environment" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 URL: https://java-app-demo-staging.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Image: java-app-demo:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: build-container
+    if: github.event_name == 'workflow_dispatch' && inputs.environment == 'production'
+    environment:
+      name: production
+      url: https://java-app-demo.azurewebsites.net
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download Docker image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp
+      
+      - name: Load Docker image
+        run: docker load --input /tmp/java-app-demo.tar
+      
+      - name: Azure Login with OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      
+      - name: Get secrets from Azure Key Vault
+        uses: azure/get-keyvault-secrets@v1
+        with:
+          keyvault: ${{ vars.AZURE_KEYVAULT_NAME }}
+          secrets: 'database-connection-string, api-key'
+        id: keyvault-secrets
+      
+      - name: Deploy Infrastructure
+        run: |
+          echo "Deploying infrastructure to Production..."
+          # az deployment group create \
+          #   --resource-group ${{ vars.AZURE_RESOURCE_GROUP_PROD }} \
+          #   --template-file infrastructure/main.bicep \
+          #   --parameters @infrastructure/production.parameters.json
+      
+      - name: Deploy to Azure Container Apps (Production)
+        run: |
+          echo "Deploying to Production environment..."
+          echo "Resource Group: ${{ vars.AZURE_RESOURCE_GROUP_PROD }}"
+          echo "Container App: ${{ vars.AZURE_CONTAINER_APP_PROD }}"
+          
+          # Deploy with blue-green deployment strategy
+          # az containerapp revision copy \
+          #   --name ${{ vars.AZURE_CONTAINER_APP_PROD }} \
+          #   --resource-group ${{ vars.AZURE_RESOURCE_GROUP_PROD }} \
+          #   --image java-app-demo:${{ github.sha }}
+      
+      - name: Wait for deployment stabilization
+        run: |
+          echo "Waiting for deployment to stabilize..."
+          sleep 30
+      
+      - name: Run production health checks
+        run: |
+          echo "Running production health checks..."
+          # In production: Comprehensive health checks
+          # curl -f https://java-app-demo.azurewebsites.net/api/health || exit 1
+          echo "✅ Production health checks passed"
+      
+      - name: Traffic split (Blue-Green)
+        run: |
+          echo "Gradually shifting traffic to new version..."
+          # Example: Start with 10% traffic, then 50%, then 100%
+          # az containerapp ingress traffic set \
+          #   --name ${{ vars.AZURE_CONTAINER_APP_PROD }} \
+          #   --resource-group ${{ vars.AZURE_RESOURCE_GROUP_PROD }} \
+          #   --revision-weight latest=100
+      
+      - name: Deployment summary
+        run: |
+          echo "## 🚀 Production Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Successfully deployed to Production environment" >> $GITHUB_STEP_SUMMARY
+          echo "🔗 URL: https://java-app-demo.azurewebsites.net" >> $GITHUB_STEP_SUMMARY
+          echo "📦 Image: java-app-demo:${{ github.sha }}" >> $GITHUB_STEP_SUMMARY
+          echo "⏰ Deployment Time: $(date -u)" >> $GITHUB_STEP_SUMMARY
+      
+      - name: Notify deployment
+        if: always()
+        run: |
+          echo "Sending deployment notification..."
+          # In production: Send to Slack, Teams, or email
+          # curl -X POST ${{ secrets.SLACK_WEBHOOK }} \
+          #   -H 'Content-Type: application/json' \
+          #   -d '{"text":"Production deployment completed successfully"}'

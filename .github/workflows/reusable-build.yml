@@ -1,0 +1,99 @@
+name: Reusable Build Workflow
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: 'Java version to use'
+        required: false
+        type: string
+        default: '17'
+      build-tool:
+        description: 'Build tool (maven or gradle)'
+        required: false
+        type: string
+        default: 'maven'
+      run-tests:
+        description: 'Run tests'
+        required: false
+        type: boolean
+        default: true
+      upload-artifacts:
+        description: 'Upload build artifacts'
+        required: false
+        type: boolean
+        default: true
+    outputs:
+      artifact-name:
+        description: 'Name of the uploaded artifact'
+        value: ${{ jobs.build.outputs.artifact-name }}
+      build-status:
+        description: 'Build status'
+        value: ${{ jobs.build.outputs.status }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    outputs:
+      artifact-name: ${{ steps.set-outputs.outputs.artifact-name }}
+      status: ${{ steps.build.outcome }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up JDK ${{ inputs.java-version }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: ${{ inputs.java-version }}
+          cache: ${{ inputs.build-tool }}
+      
+      - name: Build with Maven
+        id: build
+        if: inputs.build-tool == 'maven'
+        run: |
+          if [ "${{ inputs.run-tests }}" == "true" ]; then
+            mvn clean verify
+          else
+            mvn clean package -DskipTests
+          fi
+      
+      - name: Build with Gradle
+        id: gradle-build
+        if: inputs.build-tool == 'gradle'
+        run: |
+          if [ "${{ inputs.run-tests }}" == "true" ]; then
+            ./gradlew build
+          else
+            ./gradlew build -x test
+          fi
+      
+      - name: Set outputs
+        id: set-outputs
+        run: |
+          ARTIFACT_NAME="build-artifacts-${{ github.run_number }}"
+          echo "artifact-name=$ARTIFACT_NAME" >> $GITHUB_OUTPUT
+      
+      - name: Upload artifacts
+        if: inputs.upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.set-outputs.outputs.artifact-name }}
+          path: |
+            target/*.jar
+            build/libs/*.jar
+          retention-days: 7
+      
+      - name: Build summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Java Version: ${{ inputs.java-version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build Tool: ${{ inputs.build-tool }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Tests Run: ${{ inputs.run-tests }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Artifacts Uploaded: ${{ inputs.upload-artifacts }}" >> $GITHUB_STEP_SUMMARY

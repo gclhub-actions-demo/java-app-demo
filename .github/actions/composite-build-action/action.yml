@@ -1,0 +1,98 @@
+name: 'Composite Build Action'
+description: 'Standardized build process with caching and artifact management'
+author: 'Your Organization'
+
+inputs:
+  java-version:
+    description: 'Java version to use for building'
+    required: false
+    default: '17'
+  build-tool:
+    description: 'Build tool to use (maven or gradle)'
+    required: false
+    default: 'maven'
+  cache-key:
+    description: 'Cache key for dependency caching'
+    required: false
+    default: ''
+
+outputs:
+  build-status:
+    description: 'Status of the build'
+    value: ${{ steps.build.outcome }}
+  artifact-path:
+    description: 'Path to build artifacts'
+    value: ${{ steps.set-artifact-path.outputs.path }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: ${{ inputs.java-version }}
+        cache: ${{ inputs.build-tool }}
+    
+    - name: Restore build cache
+      if: inputs.cache-key != ''
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.m2/repository
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ inputs.cache-key }}
+        restore-keys: |
+          ${{ runner.os }}-${{ inputs.build-tool }}-
+    
+    - name: Build with Maven
+      id: build
+      if: inputs.build-tool == 'maven'
+      shell: bash
+      run: |
+        echo "Building with Maven..."
+        mvn clean package -DskipTests
+        echo "Build completed successfully"
+    
+    - name: Build with Gradle
+      if: inputs.build-tool == 'gradle'
+      shell: bash
+      run: |
+        echo "Building with Gradle..."
+        ./gradlew build -x test
+        echo "Build completed successfully"
+    
+    - name: Set artifact path
+      id: set-artifact-path
+      shell: bash
+      run: |
+        if [ "${{ inputs.build-tool }}" == "maven" ]; then
+          echo "path=target" >> $GITHUB_OUTPUT
+        else
+          echo "path=build/libs" >> $GITHUB_OUTPUT
+        fi
+    
+    - name: Save build cache
+      if: inputs.cache-key != ''
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ~/.m2/repository
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ inputs.cache-key }}
+    
+    - name: Display build summary
+      shell: bash
+      run: |
+        echo "### Build Summary 🎉" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **Java Version:** ${{ inputs.java-version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Build Tool:** ${{ inputs.build-tool }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
+        echo "- **Artifact Path:** ${{ steps.set-artifact-path.outputs.path }}" >> $GITHUB_STEP_SUMMARY
+
+branding:
+  icon: 'package'
+  color: 'blue'
