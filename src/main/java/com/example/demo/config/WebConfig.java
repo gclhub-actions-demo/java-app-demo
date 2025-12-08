@@ -11,19 +11,24 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
+    private static final String CONTROLLER_PACKAGE = "com.example.demo.controller";
+
     @Override
     public void configurePathMatch(PathMatchConfigurer configurer) {
         // Add /api prefix to all controller mappings
-        configurer.addPathPrefix("/api", clazz -> clazz.getPackageName().startsWith("com.example.demo.controller"));
+        configurer.addPathPrefix("/api", clazz -> clazz.getPackageName().startsWith(CONTROLLER_PACKAGE));
     }
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        // Configure static resource handlers
-        registry.addResourceHandler("/**")
-                .addResourceLocations("classpath:/static/", "classpath:/public/");
+        // Configure static resource handlers with specific paths
+        registry.addResourceHandler("/static/**")
+                .addResourceLocations("classpath:/static/");
         
-        // Configure webjars if needed
+        registry.addResourceHandler("/public/**")
+                .addResourceLocations("classpath:/public/");
+        
+        // Configure webjars for UI libraries
         registry.addResourceHandler("/webjars/**")
                 .addResourceLocations("classpath:/META-INF/resources/webjars/");
     }
