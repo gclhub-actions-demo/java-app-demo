@@ -22,7 +22,7 @@ import java.util.List;
  * REST controller for Customer endpoints.
  */
 @RestController
-@RequestMapping("/customers")
+@RequestMapping("/api/customers")
 @RequiredArgsConstructor
 public class CustomerController {
 
