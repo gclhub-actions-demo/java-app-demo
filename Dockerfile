@@ -8,6 +8,9 @@ WORKDIR /app
 COPY pom.xml .
 RUN mvn dependency:go-offline -B
 
+# Copy checkstyle configuration (required by maven-checkstyle-plugin)
+COPY checkstyle.xml .
+
 # Copy source code
 COPY src ./src
 
