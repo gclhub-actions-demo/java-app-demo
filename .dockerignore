@@ -5,6 +5,4 @@
 docs
 target
 !target/*.jar
-src
-pom.xml
 *.log
