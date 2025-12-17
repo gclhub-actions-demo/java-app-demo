@@ -67,15 +67,13 @@ jobs:
           cache: 'maven'
       
       - name: Run OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
-        with:
-          project: 'java-app-demo'
-          path: '.'
-          format: 'ALL'
-          out: 'reports'
-          args: >
-            --enableRetired
-            --enableExperimental
+        run: |
+          mkdir -p reports
+          mvn org.owasp:dependency-check-maven:check \
+            -DskipTests \
+            -Dformats=HTML,JSON,XML \
+            -DfailBuildOnCVSS=0 \
+            -DoutputDirectory=reports
       
       - name: Upload dependency check results
         uses: actions/upload-artifact@v4
