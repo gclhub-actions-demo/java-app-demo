@@ -30,9 +30,9 @@ The central workflow reads `.github/app-ci.json`. Its schema is strict: unknown 
 }
 ```
 
-The optional preflight and postflight extensions are repository-owned examples that execute independently in fresh hosted runners. They are read-only and receive no secrets. They cannot inject commands between required workflow steps or modify the central policy, its commands, thresholds, or toolchain. Keep them limited to validating repository prerequisites and reporting results.
+The optional preflight and postflight extensions are repository-owned examples that execute independently in fresh hosted runners. They are read-only and receive no secrets; they do not share a workspace or artifacts with the required build or with each other. They cannot inject commands between required workflow steps or modify the central policy, its commands, thresholds, or toolchain. Keep them limited to validating repository prerequisites and committed configuration.
 
-`preflight.sh` checks the Java 17/Maven environment and confirms the expected Maven project and test source layout. `postflight.sh` checks the actual Surefire and Failsafe XML reports and aggregate JaCoCo report produced by the required build; it fails if reports are missing, malformed, contain no executed tests, contain test failures/errors, or report less than 70% aggregate line coverage. This mirrors rather than weakens the Maven gates.
+`preflight.sh` checks the Java 17/Maven environment and confirms the expected Maven project and test source layout. `postflight.sh` parses `pom.xml` and verifies that Java 17, strict Checkstyle, Failsafe integration tests, the package-level 70% line-coverage minimum, and aggregate XML report generation remain configured. It does not expect generated build reports, since it runs in an isolated clean checkout.
 
 The Maven configuration in [`pom.xml`](../pom.xml) runs fail-on-error Checkstyle during `validate`, unit tests with Surefire, integration tests with Failsafe, and JaCoCo reporting/checking during `verify`. Reports are written to:
 
@@ -45,6 +45,8 @@ The Maven configuration in [`pom.xml`](../pom.xml) runs fail-on-error Checkstyle
 | JaCoCo aggregate report | `target/site/jacoco-aggregate/` |
 
 JaCoCo enforces a 70% package-level line-coverage minimum. Do not skip tests, relax Checkstyle, or lower coverage thresholds to make a pull request pass.
+
+The central required build runs the configured Maven verification and evaluates its reports. Surefire, Failsafe, Checkstyle, and the aggregate JaCoCo XML are generated on that build's runner; the aggregate XML path is `target/site/jacoco-aggregate/jacoco.xml`. Report validation belongs to the central baseline, not to the isolated postflight extension.
 
 ## Local workflows remain separate
 

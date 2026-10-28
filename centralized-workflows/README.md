@@ -6,6 +6,6 @@ The organization ruleset requires the central workflow on pull requests targetin
 
 The CodeQL sample is a standalone scanning example, not a ruleset-required workflow. CodeQL `init` and `analyze` must not run inside a workflow selected as required by a ruleset. Use a separate CodeQL workflow and protect merges with the appropriate code-scanning rule.
 
-For this Java application, the strict repository contract and isolated hooks are documented in [`docs/REQUIRED_WORKFLOWS.md`](../docs/REQUIRED_WORKFLOWS.md), with configuration in [`.github/app-ci.json`](../.github/app-ci.json). That local config cannot set build commands, alter thresholds, or change which central workflow is enforced.
+For this Java application, the strict repository contract and isolated hooks are documented in [`docs/REQUIRED_WORKFLOWS.md`](../docs/REQUIRED_WORKFLOWS.md), with configuration in [`.github/app-ci.json`](../.github/app-ci.json). The hooks run in fresh runners without shared artifacts; the central baseline owns Maven test and coverage reports. That local config cannot set build commands, alter thresholds, or change which central workflow is enforced.
 
 See the central repository for authoritative workflow definitions and organization-level setup: https://github.com/gclhub-actions-demo/required-workflows

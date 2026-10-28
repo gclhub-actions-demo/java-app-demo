@@ -6,6 +6,10 @@ fail() {
   exit 1
 }
 
+[[ -f pom.xml ]] || fail "pom.xml is required at the project root."
+[[ -f checkstyle.xml ]] || fail "checkstyle.xml is required at the project root."
+command -v python3 >/dev/null 2>&1 || fail "Python 3 is required to validate Maven configuration."
+
 python3 - <<'PY'
 from pathlib import Path
 import sys
@@ -17,93 +21,120 @@ def fail(message):
     raise SystemExit(1)
 
 
-def read_test_reports(directory, label):
-    reports = sorted(Path(directory).glob("TEST-*.xml"))
-    if not reports:
-        fail(f"No {label} test reports were generated in {directory}.")
-
-    totals = {"tests": 0, "failures": 0, "errors": 0}
-    for report in reports:
-        try:
-            root = ET.parse(report).getroot()
-        except ET.ParseError as error:
-            fail(f"Could not parse {report}: {error}")
-        suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
-        for suite in suites:
-            for key in totals:
-                try:
-                    totals[key] += int(suite.attrib.get(key, "0"))
-                except ValueError:
-                    fail(f"Invalid {key} count in {report}.")
-
-    if totals["tests"] == 0:
-        fail(f"The {label} test reports contain no executed tests.")
-    if totals["failures"] or totals["errors"]:
-        fail(
-            f"The {label} reports contain {totals['failures']} failures and "
-            f"{totals['errors']} errors."
-        )
-    print(f"{label}: {totals['tests']} tests passed across {len(reports)} report(s).")
-
-
-checkstyle_report = Path("target/checkstyle-result.xml")
-if not checkstyle_report.is_file():
-    fail(f"Checkstyle XML report is missing: {checkstyle_report}")
 try:
-    checkstyle = ET.parse(checkstyle_report).getroot()
+    pom = ET.parse("pom.xml").getroot()
 except ET.ParseError as error:
-    fail(f"Could not parse {checkstyle_report}: {error}")
-checkstyle_errors = checkstyle.findall(".//error")
-if checkstyle_errors:
-    fail(f"Checkstyle report contains {len(checkstyle_errors)} violation(s).")
-print("Checkstyle: report generated with no violations.")
+    fail(f"Could not parse pom.xml: {error}")
 
-read_test_reports("target/surefire-reports", "Unit tests")
-read_test_reports("target/failsafe-reports", "Integration tests")
+ns = {"m": "http://maven.apache.org/POM/4.0.0"}
 
-coverage_report = Path("target/site/jacoco-aggregate/jacoco.xml")
-if not coverage_report.is_file():
-    fail(f"JaCoCo aggregate XML report is missing: {coverage_report}")
-try:
-    report = ET.parse(coverage_report).getroot()
-except ET.ParseError as error:
-    fail(f"Could not parse {coverage_report}: {error}")
 
-packages = report.findall("package")
-if not packages:
-    fail(f"JaCoCo report contains no package-level coverage data: {coverage_report}")
+def text(element, path):
+    child = element.find(path, ns)
+    return child.text.strip() if child is not None and child.text else None
 
-covered_packages = 0
-for package in packages:
-    line_counter = next(
-        (counter for counter in package.findall("counter")
-         if counter.attrib.get("type") == "LINE"),
-        None,
+
+properties = pom.find("m:properties", ns)
+if properties is None:
+    fail("pom.xml has no Maven properties.")
+for prop in ("java.version", "maven.compiler.source", "maven.compiler.target"):
+    value = text(properties, f"m:{prop}")
+    if value != "17":
+        fail(f"{prop} must remain Java 17; found {value!r}.")
+
+plugins = pom.findall("m:build/m:plugins/m:plugin", ns)
+plugin_by_artifact = {text(plugin, "m:artifactId"): plugin for plugin in plugins}
+
+checkstyle = plugin_by_artifact.get("maven-checkstyle-plugin")
+if checkstyle is None:
+    fail("maven-checkstyle-plugin is required.")
+if text(checkstyle, "m:configuration/m:failsOnError") != "true":
+    fail("Checkstyle must continue to fail on errors.")
+if text(checkstyle, "m:configuration/m:configLocation") != "checkstyle.xml":
+    fail("Maven must use the repository's checkstyle.xml.")
+if not any(
+    text(execution, "m:phase") == "validate"
+    and any(text(goal, ".") == "check" for goal in execution.findall("m:goals/m:goal", ns))
+    for execution in checkstyle.findall("m:executions/m:execution", ns)
+):
+    fail("Checkstyle must run during Maven validate.")
+
+if "maven-surefire-plugin" not in plugin_by_artifact:
+    fail("maven-surefire-plugin is required for unit tests.")
+
+failsafe = plugin_by_artifact.get("maven-failsafe-plugin")
+if failsafe is None:
+    fail("maven-failsafe-plugin is required for integration tests.")
+failsafe_goals = {
+    text(goal, ".")
+    for execution in failsafe.findall("m:executions/m:execution", ns)
+    for goal in execution.findall("m:goals/m:goal", ns)
+}
+if not {"integration-test", "verify"}.issubset(failsafe_goals):
+    fail("Maven Failsafe must retain both integration-test and verify goals.")
+
+jacoco = plugin_by_artifact.get("jacoco-maven-plugin")
+if jacoco is None:
+    fail("jacoco-maven-plugin is required.")
+coverage_check = next(
+    (
+        execution
+        for execution in jacoco.findall("m:executions/m:execution", ns)
+        if text(execution, "m:id") == "jacoco-check"
+    ),
+    None,
+)
+if coverage_check is None:
+    fail("The jacoco-check execution is required.")
+if not any(
+    text(goal, ".") == "check"
+    for goal in coverage_check.findall("m:goals/m:goal", ns)
+):
+    fail("The JaCoCo check goal must remain enabled.")
+rules = coverage_check.findall(
+    "m:configuration/m:rules/m:rule",
+    ns,
+)
+if not any(
+    text(rule, "m:element") == "PACKAGE"
+    and any(
+        text(limit, "m:counter") == "LINE"
+        and text(limit, "m:value") == "COVEREDRATIO"
+        and text(limit, "m:minimum") == "0.70"
+        for limit in rule.findall("m:limits/m:limit", ns)
     )
-    if line_counter is None:
-        continue
-    try:
-        missed = int(line_counter.attrib["missed"])
-        covered = int(line_counter.attrib["covered"])
-    except (KeyError, ValueError):
-        fail(f"JaCoCo report has an invalid LINE counter for package {package.attrib.get('name')}.")
+    for rule in rules
+):
+    fail("JaCoCo must retain the 70% package-level line-coverage minimum.")
 
-    total = missed + covered
-    if total == 0:
-        fail(f"JaCoCo report contains no measured lines for package {package.attrib.get('name')}.")
-    covered_packages += 1
-    percentage = covered / total
-    print(
-        f"Package {package.attrib.get('name')}: "
-        f"{percentage:.1%} line coverage ({covered}/{total} lines)."
-    )
-    if percentage < 0.70:
-        fail(
-            f"Package {package.attrib.get('name')} is below the project's "
-            "existing 70% line-coverage minimum."
-        )
-if covered_packages == 0:
-    fail("JaCoCo aggregate report contains no package-level LINE counters.")
+aggregate_report = next(
+    (
+        execution
+        for execution in jacoco.findall("m:executions/m:execution", ns)
+        if text(execution, "m:id") == "report-aggregate"
+    ),
+    None,
+)
+if aggregate_report is None or text(aggregate_report, "m:phase") != "verify":
+    fail("JaCoCo aggregate reporting must remain bound to verify.")
+if not any(
+    text(goal, ".") == "report"
+    for goal in aggregate_report.findall("m:goals/m:goal", ns)
+):
+    fail("The JaCoCo aggregate report goal must remain enabled.")
+if text(aggregate_report, "m:configuration/m:outputDirectory") != (
+    "${project.reporting.outputDirectory}/jacoco-aggregate"
+):
+    fail("JaCoCo aggregate report must be written to target/site/jacoco-aggregate/.")
+formats = {
+    text(format_element, ".")
+    for format_element in aggregate_report.findall("m:configuration/m:formats/m:format", ns)
+}
+if "XML" not in formats:
+    fail("JaCoCo aggregate report must explicitly generate XML.")
+
+print(
+    "Postflight passed: Java 17, strict Checkstyle, Failsafe integration tests, "
+    "package line-coverage threshold, and aggregate XML reporting remain configured."
+)
 PY
-
-printf '%s\n' "Postflight passed: unit, integration, and aggregate coverage reports are present and valid."
