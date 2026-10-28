@@ -2,6 +2,7 @@ package com.example.demo;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.ConfigurableApplicationContext;
 
 /**
  * Main application class for the Java App Demo.
@@ -14,7 +15,7 @@ public class Application {
         new Application().runApplication(args);
     }
 
-    private void runApplication(String[] args) {
-        SpringApplication.run(Application.class, args);
+    ConfigurableApplicationContext runApplication(String... args) {
+        return SpringApplication.run(Application.class, args);
     }
 }

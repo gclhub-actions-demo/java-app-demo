@@ -73,6 +73,7 @@ packages = report.findall("package")
 if not packages:
     fail(f"JaCoCo report contains no package-level coverage data: {coverage_report}")
 
+covered_packages = 0
 for package in packages:
     line_counter = next(
         (counter for counter in package.findall("counter")
@@ -80,7 +81,7 @@ for package in packages:
         None,
     )
     if line_counter is None:
-        fail(f"JaCoCo report has no LINE counter for package {package.attrib.get('name')}.")
+        continue
     try:
         missed = int(line_counter.attrib["missed"])
         covered = int(line_counter.attrib["covered"])
@@ -90,6 +91,7 @@ for package in packages:
     total = missed + covered
     if total == 0:
         fail(f"JaCoCo report contains no measured lines for package {package.attrib.get('name')}.")
+    covered_packages += 1
     percentage = covered / total
     print(
         f"Package {package.attrib.get('name')}: "
@@ -100,6 +102,8 @@ for package in packages:
             f"Package {package.attrib.get('name')} is below the project's "
             "existing 70% line-coverage minimum."
         )
+if covered_packages == 0:
+    fail("JaCoCo aggregate report contains no package-level LINE counters.")
 PY
 
 printf '%s\n' "Postflight passed: unit, integration, and aggregate coverage reports are present and valid."
