@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "projects": [
+    {
+      "id": "java",
+      "path": "."
+    }
+  ],
+  "extensions": {
+    "preflight": ".github/ci/preflight.sh",
+    "postflight": ".github/ci/postflight.sh"
+  }
+}
